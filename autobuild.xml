@@ -137,6 +137,7 @@
           <key>manifest</key>
           <array>
             <string>include/openssl/*.h</string>
+            <string>include/crypto/*.h</string>
             <string>LICENSES/openssl.txt</string>
             <string>docs/openssl/README.Linden</string>
           </array>

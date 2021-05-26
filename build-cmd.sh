@@ -130,12 +130,15 @@ print(':'.join(OrderedDict((dir.rstrip('/'), 1) for dir in sys.argv[1].split(':'
 
             # Publish headers
             mkdir -p "$stage/include/openssl"
+            mkdir -p "$stage/include/crypto"
 
             # These files are symlinks in the SSL dist but just show up as text files
             # on windows that contain a string to their source.  So run some perl to
             # copy the right files over.
             perl ../copy-windows-links.pl \
                 "include/openssl" "$(cygpath -w "$stage/include/openssl")"
+            perl ../copy-windows-links.pl \
+                "include/crypto" "$(cygpath -w "$stage/include/crypto")"
 
             #nmake test
 
@@ -172,9 +175,6 @@ print(':'.join(OrderedDict((dir.rstrip('/'), 1) for dir in sys.argv[1].split(':'
             export PATH="$PATH":/usr/X11/bin/
 
             # Install name for dylibs based on major version number
-            # Not clear exactly why Configure/make generates lib*.1.0.0.dylib
-            # for ${major_version}.${minor_version}.${build_version} == 1.0.1,
-            # but obviously we must correctly predict the dylib filenames.
             crypto_target_name="libcrypto.${major_version}.${minor_version}.dylib"
             crypto_install_name="@executable_path/../Resources/${crypto_target_name}"
             ssl_target_name="libssl.${major_version}.${minor_version}.dylib"
