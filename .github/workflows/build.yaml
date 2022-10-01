@@ -1,0 +1,31 @@
+name: Build
+on: [push]
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [windows-2022, macos-11, ubuntu-22.04]
+        addrsize: ["64"]
+        include:
+          - os: windows-2022
+            addrsize: "32"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Install nasm and strawberry perl
+        if: runner.os == 'Windows'
+        run: |
+          choco install nasm strawberryperl -y --no-progress
+          Add-Content $env:GITHUB_PATH "C:\Program Files\NASM"
+          Add-Content $env:GITHUB_PATH "C:\Strawberry\perl\bin"
+
+      - uses: secondlife/action-autobuild@v3
+        with:
+          addrsize: ${{ matrix.addrsize }}
+  release:
+    needs: build
+    runs-on: [ubuntu-latest]
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: secondlife/action-autobuild-release@v1
+        with:
+          public: true

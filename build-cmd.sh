@@ -85,6 +85,9 @@ pushd "$OPENSSL_SOURCE_DIR"
                 targetname=VC-WIN64A
             fi
 
+            # Ensure strawberry perl is preferred over system or cygwin perl
+            export PATH="/cygdrive/c/Strawberry/perl/bin:$PATH"
+
             # configre won't work with VC-* builds undex cygwin's perl, use window's one
 
             # Set CFLAG directly, rather than on the Configure command line.
@@ -97,7 +100,7 @@ pushd "$OPENSSL_SOURCE_DIR"
 
             # disable idea cypher per Phoenix's patent concerns (DEV-22827)
             # no-asm disables the need for NASM
-            /cygdrive/c/Strawberry/perl/bin/perl Configure "$targetname" no-idea zlib threads -DNO_WINDOWS_BRAINDEATH \
+            perl Configure "$targetname" no-idea zlib threads -DNO_WINDOWS_BRAINDEATH \
                 --with-zlib-include="$(cygpath -w "$stage/packages/include/zlib-ng")" \
                 --with-zlib-lib="$(cygpath -w "$stage/packages/lib/release/zlib.lib")"
 
@@ -122,9 +125,6 @@ pushd "$OPENSSL_SOURCE_DIR"
 from collections import OrderedDict
 print(':'.join(OrderedDict((dir.rstrip('/'), 1) for dir in sys.argv[1].split(':'))))" "$PATH")"
 
-
-            # Define PERL for nmake to use 
-            PERL="c:/Strawberry/perl/bin"
 
             nmake
 
@@ -245,7 +245,7 @@ print(':'.join(OrderedDict((dir.rstrip('/'), 1) for dir in sys.argv[1].split(':'
                 --with-zlib-lib="$stage/packages/lib/release" \
                 "${packed[@]}"
             make depend
-            make
+            make -j$(nproc)
             # Avoid plain 'make install' because, at least on Yosemite,
             # installing the man pages into the staging area creates problems
             # due to the number of symlinks. Thanks to Cinder for suggesting
@@ -323,7 +323,7 @@ print(':'.join(OrderedDict((dir.rstrip('/'), 1) for dir in sys.argv[1].split(':'
                 --with-zlib-include="$stage/packages/include/zlib-ng" \
                 --with-zlib-lib="$stage"/packages/lib/release/
             make depend
-            make
+            make -j$(nproc)
             make install
 
             # conditionally run unit tests
@@ -345,4 +345,3 @@ print(':'.join(OrderedDict((dir.rstrip('/'), 1) for dir in sys.argv[1].split(':'
 popd
 
 mkdir -p "$stage"/docs/openssl/
-cp -a README.Linden "$stage"/docs/openssl/
