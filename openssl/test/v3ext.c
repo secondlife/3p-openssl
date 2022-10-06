@@ -8,6 +8,7 @@
  */
 
 #include <stdio.h>
+#include <string.h> // https://github.com/openssl/openssl/issues/18720
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
 #include <openssl/pem.h>

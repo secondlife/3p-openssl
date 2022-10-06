@@ -11,12 +11,11 @@ jobs:
             addrsize: "32"
     runs-on: ${{ matrix.os }}
     steps:
-      - name: Install nasm and strawberry perl
+      - name: Install nasm
         if: runner.os == 'Windows'
         run: |
-          choco install nasm strawberryperl -y --no-progress
+          choco install nasm -y --no-progress
           Add-Content $env:GITHUB_PATH "C:\Program Files\NASM"
-          Add-Content $env:GITHUB_PATH "C:\Strawberry\perl\bin"
 
       - uses: secondlife/action-autobuild@v3
         with:

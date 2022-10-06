@@ -40,6 +40,30 @@ restore_dylibs ()
     done
 }
 
+# We've observed some weird failures in which the PATH is too big
+# to be passed into cmd.exe! When that gets munged, we start
+# seeing errors like failing to understand the 'perl' command --
+# which we *just* successfully used. Thing is, by this point in
+# the script we've acquired a shocking number of duplicate
+# entries. Dedup the PATH using Python's OrderedDict, which
+# preserves the order in which you insert keys.
+# We find that some of the Visual Studio PATH entries appear both
+# with and without a trailing slash, which is pointless. Strip
+# those off and dedup what's left.
+# Pass the existing PATH as an explicit argument rather than
+# reading it from the environment to bypass the fact that cygwin
+# implicitly converts PATH to Windows form when running a native
+# executable. Since we're setting bash's PATH, leave everything in
+# cygwin form. That means splitting and rejoining on ':' rather
+# than on os.pathsep, which on Windows is ';'.
+# Use python -u, else the resulting PATH will end with a spurious '\r'.
+dedupe_path ()
+{
+    export PATH="$(python -u -c "import sys
+from collections import OrderedDict
+print(':'.join(OrderedDict((dir.rstrip('/'), 1) for dir in sys.argv[1].split(':'))))" "$PATH")"
+}
+
 top="$(pwd)"
 stage="$top/stage"
 
@@ -85,10 +109,9 @@ pushd "$OPENSSL_SOURCE_DIR"
                 targetname=VC-WIN64A
             fi
 
-            # Ensure strawberry perl is preferred over system or cygwin perl
-            export PATH="/cygdrive/c/Strawberry/perl/bin:$PATH"
+            dedupe_path
 
-            # configre won't work with VC-* builds undex cygwin's perl, use window's one
+            # configure won't work with VC-* builds undex cygwin's perl, use window's one
 
             # Set CFLAG directly, rather than on the Configure command line.
             # Configure promises to pass through -switches, but is completely
@@ -98,33 +121,12 @@ pushd "$OPENSSL_SOURCE_DIR"
             # CFLAG can accept /switches and correctly pass them to cl.exe.
             export CFLAG="$LL_BUILD_RELEASE"
 
-            # disable idea cypher per Phoenix's patent concerns (DEV-22827)
-            # no-asm disables the need for NASM
-            perl Configure "$targetname" no-idea zlib threads -DNO_WINDOWS_BRAINDEATH \
+            /cygdrive/c/Strawberry/perl/bin/perl Configure "$targetname" no-idea zlib threads -DNO_WINDOWS_BRAINDEATH \
                 --with-zlib-include="$(cygpath -w "$stage/packages/include/zlib-ng")" \
                 --with-zlib-lib="$(cygpath -w "$stage/packages/lib/release/zlib.lib")"
 
-            # We've observed some weird failures in which the PATH is too big
-            # to be passed into cmd.exe! When that gets munged, we start
-            # seeing errors like failing to understand the 'perl' command --
-            # which we *just* successfully used. Thing is, by this point in
-            # the script we've acquired a shocking number of duplicate
-            # entries. Dedup the PATH using Python's OrderedDict, which
-            # preserves the order in which you insert keys.
-            # We find that some of the Visual Studio PATH entries appear both
-            # with and without a trailing slash, which is pointless. Strip
-            # those off and dedup what's left.
-            # Pass the existing PATH as an explicit argument rather than
-            # reading it from the environment to bypass the fact that cygwin
-            # implicitly converts PATH to Windows form when running a native
-            # executable. Since we're setting bash's PATH, leave everything in
-            # cygwin form. That means splitting and rejoining on ':' rather
-            # than on os.pathsep, which on Windows is ';'.
-            # Use python -u, else the resulting PATH will end with a spurious '\r'.
-            export PATH="$(python -u -c "import sys
-from collections import OrderedDict
-print(':'.join(OrderedDict((dir.rstrip('/'), 1) for dir in sys.argv[1].split(':'))))" "$PATH")"
-
+            # Define PERL for nmake to use
+            PERL="c:/Strawberry/perl/bin"
 
             nmake
 
