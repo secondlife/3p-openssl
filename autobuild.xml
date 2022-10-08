@@ -94,8 +94,6 @@
       <string>LICENSES/openssl.txt</string>
       <key>name</key>
       <string>openssl</string>
-      <key>use_scm_version</key>
-      <boolean>true</boolean>
       <key>platforms</key>
       <map>
         <key>common</key>
@@ -236,6 +234,8 @@
       </map>
       <key>source_directory</key>
       <string>openssl</string>
+      <key>version_file</key>
+      <string>VERSION.txt</string>
     </map>
     <key>type</key>
     <string>autobuild</string>
