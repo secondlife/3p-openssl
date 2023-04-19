@@ -40,30 +40,6 @@ restore_dylibs ()
     done
 }
 
-# We've observed some weird failures in which the PATH is too big
-# to be passed into cmd.exe! When that gets munged, we start
-# seeing errors like failing to understand the 'perl' command --
-# which we *just* successfully used. Thing is, by this point in
-# the script we've acquired a shocking number of duplicate
-# entries. Dedup the PATH using Python's OrderedDict, which
-# preserves the order in which you insert keys.
-# We find that some of the Visual Studio PATH entries appear both
-# with and without a trailing slash, which is pointless. Strip
-# those off and dedup what's left.
-# Pass the existing PATH as an explicit argument rather than
-# reading it from the environment to bypass the fact that cygwin
-# implicitly converts PATH to Windows form when running a native
-# executable. Since we're setting bash's PATH, leave everything in
-# cygwin form. That means splitting and rejoining on ':' rather
-# than on os.pathsep, which on Windows is ';'.
-# Use python -u, else the resulting PATH will end with a spurious '\r'.
-dedupe_path ()
-{
-    export PATH="$(python -u -c "import sys
-from collections import OrderedDict
-print(':'.join(OrderedDict((dir.rstrip('/'), 1) for dir in sys.argv[1].split(':'))))" "$PATH")"
-}
-
 top="$(pwd)"
 stage="$top/stage"
 
@@ -74,6 +50,9 @@ stage="$top/stage"
 source_environment_tempfile="$stage/source_environment.sh"
 "$autobuild" source_environment > "$source_environment_tempfile"
 . "$source_environment_tempfile"
+
+# remove_cxxstd
+source "$(dirname "$AUTOBUILD_VARIABLES_FILE")/functions"
 
 OPENSSL_SOURCE_DIR="openssl"
 
@@ -108,8 +87,6 @@ pushd "$OPENSSL_SOURCE_DIR"
                 # might require running vcvars64.bat from VS studio
                 targetname=VC-WIN64A
             fi
-
-            dedupe_path
 
             # configure won't work with VC-* builds undex cygwin's perl, use window's one
 
@@ -146,26 +123,19 @@ pushd "$OPENSSL_SOURCE_DIR"
             # libssl.lib is for dll import. We probably don't care about
             # _static variant since we need a dll, include just in case
 
-            if [ "$AUTOBUILD_ADDRSIZE" = 32 ]
-            then
-                mv libssl-1_1.dll $stage/lib/release/.
-                mv libssl-1_1.pdb $stage/lib/release/.
-                mv libssl_static.lib $stage/lib/release/.
-                mv libssl.lib $stage/lib/release/.
-                mv libcrypto-1_1.dll $stage/lib/release/.
-                mv libcrypto-1_1.pdb $stage/lib/release/.
-                mv libcrypto_static.lib $stage/lib/release/.
-                mv libcrypto.lib $stage/lib/release/.
-            else
-                mv libssl-1_1-x64.dll $stage/lib/release/.
-                mv libssl-1_1-x64.pdb $stage/lib/release/.
-                mv libssl_static.lib $stage/lib/release/.
-                mv libssl.lib $stage/lib/release/.
-                mv libcrypto-1_1-x64.dll $stage/lib/release/.
-                mv libcrypto-1_1-x64.pdb $stage/lib/release/.
-                mv libcrypto_static.lib $stage/lib/release/.
-                mv libcrypto.lib $stage/lib/release/.
+            if [ "$AUTOBUILD_ADDRSIZE" = 64 ]
+            then sfx="-x64"
+            else sfx=""
             fi
+
+            mv libssl-1_1$sfx.dll $stage/lib/release/.
+            mv libssl-1_1$sfx.pdb $stage/lib/release/.
+            mv libssl_static.lib $stage/lib/release/.
+            mv libssl.lib $stage/lib/release/.
+            mv libcrypto-1_1$sfx.dll $stage/lib/release/.
+            mv libcrypto-1_1$sfx.pdb $stage/lib/release/.
+            mv libcrypto_static.lib $stage/lib/release/.
+            mv libcrypto.lib $stage/lib/release/.
 
         ;;
 
@@ -197,9 +167,10 @@ pushd "$OPENSSL_SOURCE_DIR"
             # Anyway, selection of $targetname (below) appears to handle the
             # -arch switch implicitly.
             opts="${TARGET_OPTS:-$LL_BUILD_RELEASE}"
+            opts="$(remove_cxxstd $opts)"
             # As of 2017-09-08:
             # clang: error: unknown argument: '-gdwarf-with-dsym'
-            opts="${opts/-gdwarf-with-dsym/-gdwarf-2}"
+            opts="$(replace_switch -gdwarf-with-dsym -gdwarf-2 $opts)"
             export CFLAG="$opts"
             export LDFLAGS="-Wl,-headerpad_max_install_names"
 
@@ -221,18 +192,18 @@ pushd "$OPENSSL_SOURCE_DIR"
                 # Flush 'pack' array to the next entry of 'packed'.
                 # ${pack[*]} concatenates all of pack's entries into a single
                 # string separated by the first char from $IFS.
-                packed[${#packed[*]}]="${pack[*]:-}"
+                packed+=("${pack[*]:-}")
                 pack=()
             }
             for opt in $opts $LDFLAGS
             do 
-               if [ "${opt#-}" != "$opt" ]
+               if [ "x${opt#-}" != "x$opt" ]
                then
                    # 'opt' does indeed start with dash.
                    flush
                fi
                # append 'opt' to 'pack' array
-               pack[${#pack[*]}]="$opt"
+               pack+=("$opt")
             done
             # When we exit the above loop, we've got one more pending entry in
             # 'pack'. Flush that too.
@@ -290,6 +261,7 @@ pushd "$OPENSSL_SOURCE_DIR"
 
             # Default target per AUTOBUILD_ADDRSIZE
             opts="${TARGET_OPTS:--m$AUTOBUILD_ADDRSIZE $LL_BUILD_RELEASE}"
+            opts="$(remove_cppstd $opts)"
 
             # Handle any deliberate platform targeting
             if [ -z "${TARGET_CPPFLAGS:-}" ]; then
