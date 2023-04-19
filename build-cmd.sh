@@ -261,7 +261,7 @@ pushd "$OPENSSL_SOURCE_DIR"
 
             # Default target per AUTOBUILD_ADDRSIZE
             opts="${TARGET_OPTS:--m$AUTOBUILD_ADDRSIZE $LL_BUILD_RELEASE}"
-            opts="$(remove_cppstd $opts)"
+            opts="$(remove_cxxstd $opts)"
 
             # Handle any deliberate platform targeting
             if [ -z "${TARGET_CPPFLAGS:-}" ]; then
