@@ -51,6 +51,9 @@ source_environment_tempfile="$stage/source_environment.sh"
 "$autobuild" source_environment > "$source_environment_tempfile"
 . "$source_environment_tempfile"
 
+# remove_cxxstd
+source "$(dirname "$AUTOBUILD_VARIABLES_FILE")/functions"
+
 OPENSSL_SOURCE_DIR="openssl"
 
 raw_version=$(perl -ne 's/#\s*define\s+OPENSSL_VERSION_NUMBER\s+([\d]+)/$1/ && print' "${OPENSSL_SOURCE_DIR}/include/openssl/opensslv.h")
@@ -85,7 +88,7 @@ pushd "$OPENSSL_SOURCE_DIR"
                 targetname=VC-WIN64A
             fi
 
-            # configre won't work with VC-* builds undex cygwin's perl, use window's one
+            # configure won't work with VC-* builds undex cygwin's perl, use window's one
 
             # Set CFLAG directly, rather than on the Configure command line.
             # Configure promises to pass through -switches, but is completely
@@ -95,35 +98,11 @@ pushd "$OPENSSL_SOURCE_DIR"
             # CFLAG can accept /switches and correctly pass them to cl.exe.
             export CFLAG="$LL_BUILD_RELEASE"
 
-            # disable idea cypher per Phoenix's patent concerns (DEV-22827)
-            # no-asm disables the need for NASM
             /cygdrive/c/Strawberry/perl/bin/perl Configure "$targetname" no-idea zlib threads -DNO_WINDOWS_BRAINDEATH \
                 --with-zlib-include="$(cygpath -w "$stage/packages/include/zlib-ng")" \
                 --with-zlib-lib="$(cygpath -w "$stage/packages/lib/release/zlib.lib")"
 
-            # We've observed some weird failures in which the PATH is too big
-            # to be passed into cmd.exe! When that gets munged, we start
-            # seeing errors like failing to understand the 'perl' command --
-            # which we *just* successfully used. Thing is, by this point in
-            # the script we've acquired a shocking number of duplicate
-            # entries. Dedup the PATH using Python's OrderedDict, which
-            # preserves the order in which you insert keys.
-            # We find that some of the Visual Studio PATH entries appear both
-            # with and without a trailing slash, which is pointless. Strip
-            # those off and dedup what's left.
-            # Pass the existing PATH as an explicit argument rather than
-            # reading it from the environment to bypass the fact that cygwin
-            # implicitly converts PATH to Windows form when running a native
-            # executable. Since we're setting bash's PATH, leave everything in
-            # cygwin form. That means splitting and rejoining on ':' rather
-            # than on os.pathsep, which on Windows is ';'.
-            # Use python -u, else the resulting PATH will end with a spurious '\r'.
-            export PATH="$(python -u -c "import sys
-from collections import OrderedDict
-print(':'.join(OrderedDict((dir.rstrip('/'), 1) for dir in sys.argv[1].split(':'))))" "$PATH")"
-
-
-            # Define PERL for nmake to use 
+            # Define PERL for nmake to use
             PERL="c:/Strawberry/perl/bin"
 
             nmake
@@ -144,26 +123,19 @@ print(':'.join(OrderedDict((dir.rstrip('/'), 1) for dir in sys.argv[1].split(':'
             # libssl.lib is for dll import. We probably don't care about
             # _static variant since we need a dll, include just in case
 
-            if [ "$AUTOBUILD_ADDRSIZE" = 32 ]
-            then
-                mv libssl-1_1.dll $stage/lib/release/.
-                mv libssl-1_1.pdb $stage/lib/release/.
-                mv libssl_static.lib $stage/lib/release/.
-                mv libssl.lib $stage/lib/release/.
-                mv libcrypto-1_1.dll $stage/lib/release/.
-                mv libcrypto-1_1.pdb $stage/lib/release/.
-                mv libcrypto_static.lib $stage/lib/release/.
-                mv libcrypto.lib $stage/lib/release/.
-            else
-                mv libssl-1_1-x64.dll $stage/lib/release/.
-                mv libssl-1_1-x64.pdb $stage/lib/release/.
-                mv libssl_static.lib $stage/lib/release/.
-                mv libssl.lib $stage/lib/release/.
-                mv libcrypto-1_1-x64.dll $stage/lib/release/.
-                mv libcrypto-1_1-x64.pdb $stage/lib/release/.
-                mv libcrypto_static.lib $stage/lib/release/.
-                mv libcrypto.lib $stage/lib/release/.
+            if [ "$AUTOBUILD_ADDRSIZE" = 64 ]
+            then sfx="-x64"
+            else sfx=""
             fi
+
+            mv libssl-1_1$sfx.dll $stage/lib/release/.
+            mv libssl-1_1$sfx.pdb $stage/lib/release/.
+            mv libssl_static.lib $stage/lib/release/.
+            mv libssl.lib $stage/lib/release/.
+            mv libcrypto-1_1$sfx.dll $stage/lib/release/.
+            mv libcrypto-1_1$sfx.pdb $stage/lib/release/.
+            mv libcrypto_static.lib $stage/lib/release/.
+            mv libcrypto.lib $stage/lib/release/.
 
         ;;
 
@@ -195,9 +167,10 @@ print(':'.join(OrderedDict((dir.rstrip('/'), 1) for dir in sys.argv[1].split(':'
             # Anyway, selection of $targetname (below) appears to handle the
             # -arch switch implicitly.
             opts="${TARGET_OPTS:-$LL_BUILD_RELEASE}"
+            opts="$(remove_cxxstd $opts)"
             # As of 2017-09-08:
             # clang: error: unknown argument: '-gdwarf-with-dsym'
-            opts="${opts/-gdwarf-with-dsym/-gdwarf-2}"
+            opts="$(replace_switch -gdwarf-with-dsym -gdwarf-2 $opts)"
             export CFLAG="$opts"
             export LDFLAGS="-Wl,-headerpad_max_install_names"
 
@@ -219,18 +192,18 @@ print(':'.join(OrderedDict((dir.rstrip('/'), 1) for dir in sys.argv[1].split(':'
                 # Flush 'pack' array to the next entry of 'packed'.
                 # ${pack[*]} concatenates all of pack's entries into a single
                 # string separated by the first char from $IFS.
-                packed[${#packed[*]}]="${pack[*]:-}"
+                packed+=("${pack[*]:-}")
                 pack=()
             }
             for opt in $opts $LDFLAGS
             do 
-               if [ "${opt#-}" != "$opt" ]
+               if [ "x${opt#-}" != "x$opt" ]
                then
                    # 'opt' does indeed start with dash.
                    flush
                fi
                # append 'opt' to 'pack' array
-               pack[${#pack[*]}]="$opt"
+               pack+=("$opt")
             done
             # When we exit the above loop, we've got one more pending entry in
             # 'pack'. Flush that too.
@@ -245,7 +218,7 @@ print(':'.join(OrderedDict((dir.rstrip('/'), 1) for dir in sys.argv[1].split(':'
                 --with-zlib-lib="$stage/packages/lib/release" \
                 "${packed[@]}"
             make depend
-            make
+            make -j$(nproc)
             # Avoid plain 'make install' because, at least on Yosemite,
             # installing the man pages into the staging area creates problems
             # due to the number of symlinks. Thanks to Cinder for suggesting
@@ -288,6 +261,7 @@ print(':'.join(OrderedDict((dir.rstrip('/'), 1) for dir in sys.argv[1].split(':'
 
             # Default target per AUTOBUILD_ADDRSIZE
             opts="${TARGET_OPTS:--m$AUTOBUILD_ADDRSIZE $LL_BUILD_RELEASE}"
+            opts="$(remove_cxxstd $opts)"
 
             # Handle any deliberate platform targeting
             if [ -z "${TARGET_CPPFLAGS:-}" ]; then
@@ -323,7 +297,7 @@ print(':'.join(OrderedDict((dir.rstrip('/'), 1) for dir in sys.argv[1].split(':'
                 --with-zlib-include="$stage/packages/include/zlib-ng" \
                 --with-zlib-lib="$stage"/packages/lib/release/
             make depend
-            make
+            make -j$(nproc)
             make install
 
             # conditionally run unit tests
@@ -345,4 +319,3 @@ print(':'.join(OrderedDict((dir.rstrip('/'), 1) for dir in sys.argv[1].split(':'
 popd
 
 mkdir -p "$stage"/docs/openssl/
-cp -a README.Linden "$stage"/docs/openssl/
