@@ -17,7 +17,7 @@ jobs:
           choco install nasm -y --no-progress
           Add-Content $env:GITHUB_PATH "C:\Program Files\NASM"
 
-      - uses: secondlife/action-autobuild@v3
+      - uses: secondlife/action-autobuild@v4
         with:
           addrsize: ${{ matrix.addrsize }}
   release:
