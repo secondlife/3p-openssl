@@ -13,7 +13,7 @@ if [ -z "$AUTOBUILD" ] ; then
     exit 1
 fi
 
-if [ "$OSTYPE" = "cygwin" ] ; then
+if [[ "$OSTYPE" == "cygwin" || "$OSTYPE" == "msys" ]] ; then
     autobuild="$(cygpath -u $AUTOBUILD)"
 else
     autobuild="$AUTOBUILD"
@@ -56,26 +56,13 @@ source "$(dirname "$AUTOBUILD_VARIABLES_FILE")/functions"
 
 OPENSSL_SOURCE_DIR="openssl"
 
-raw_version=$(perl -ne 's/#\s*define\s+OPENSSL_VERSION_NUMBER\s+([\d]+)/$1/ && print' "${OPENSSL_SOURCE_DIR}/include/openssl/opensslv.h")
-
-major_version=$(echo ${raw_version:2:1})
-minor_version=$((10#$(echo ${raw_version:3:2})))
-build_version=$((10#$(echo ${raw_version:5:2})))
-
-patch_level_hex=$(echo $raw_version | cut -c 8-9)
-patch_level_dec=$((16#$patch_level_hex))
-str="abcdefghijklmnopqrstuvwxyz"
-patch_level_version=$(echo ${str:patch_level_dec-1:1})
-
-version_str=${major_version}.${minor_version}.${build_version}${patch_level_version}
-
-build=${AUTOBUILD_BUILD_ID:=0}
-echo "${version_str}.${build}" > "${stage}/VERSION.txt"
-
 pushd "$OPENSSL_SOURCE_DIR"
     case "$AUTOBUILD_PLATFORM" in
 
         windows*)
+            # configure won't work with VC-* builds undex cygwin's perl, use window's one
+            export PATH="/c/Strawberry/perl/bin:$PATH"
+
             load_vsvars
 
             mkdir -p "$stage/lib/release"
@@ -88,55 +75,36 @@ pushd "$OPENSSL_SOURCE_DIR"
                 targetname=VC-WIN64A
             fi
 
-            # configure won't work with VC-* builds undex cygwin's perl, use window's one
-
-            # Set CFLAG directly, rather than on the Configure command line.
+            # Set CFLAGS directly, rather than on the Configure command line.
             # Configure promises to pass through -switches, but is completely
             # confounded by /switches. If you change /switches to -switches
             # using bash string magic, Configure does pass them through --
             # only to have cl.exe ignore them with extremely verbose warnings!
-            # CFLAG can accept /switches and correctly pass them to cl.exe.
-            export CFLAG="$LL_BUILD_RELEASE"
+            # CFLAGS can accept /switches and correctly pass them to cl.exe.
+            opts="$(replace_switch /Zi /Z7 $LL_BUILD_RELEASE)"
+            plainopts="$(remove_switch /GR $(remove_cxxstd $opts))"
+            export CFLAGS="$plainopts"
+            export CXXFLAGS="$opts"
 
-            /cygdrive/c/Strawberry/perl/bin/perl Configure "$targetname" no-idea zlib threads -DNO_WINDOWS_BRAINDEATH \
+            perl Configure "$targetname" zlib no-zlib-dynamic threads no-shared -DUNICODE -D_UNICODE -FS \
                 --with-zlib-include="$(cygpath -w "$stage/packages/include/zlib-ng")" \
                 --with-zlib-lib="$(cygpath -w "$stage/packages/lib/release/zlib.lib")"
 
-            # Define PERL for nmake to use
-            PERL="c:/Strawberry/perl/bin"
-
-            nmake
+            jom
 
             # Publish headers
             mkdir -p "$stage/include/openssl"
 
-            # These files are symlinks in the SSL dist but just show up as text files
-            # on windows that contain a string to their source.  So run some perl to
-            # copy the right files over.
-            perl ../copy-windows-links.pl \
-                "include/openssl" "$(cygpath -w "$stage/include/openssl")"
-
-            #nmake test
-
-            # move dlls and libs
-            # It appears that libssl_static.lib is for integration and
-            # libssl.lib is for dll import. We probably don't care about
-            # _static variant since we need a dll, include just in case
-
-            if [ "$AUTOBUILD_ADDRSIZE" = 64 ]
-            then sfx="-x64"
-            else sfx=""
+            # conditionally run unit tests
+            if [ "${DISABLE_UNIT_TESTS:-0}" = "0" ]; then
+                jom test
             fi
 
-            mv libssl-1_1$sfx.dll $stage/lib/release/.
-            mv libssl-1_1$sfx.pdb $stage/lib/release/.
-            mv libssl_static.lib $stage/lib/release/.
-            mv libssl.lib $stage/lib/release/.
-            mv libcrypto-1_1$sfx.dll $stage/lib/release/.
-            mv libcrypto-1_1$sfx.pdb $stage/lib/release/.
-            mv libcrypto_static.lib $stage/lib/release/.
-            mv libcrypto.lib $stage/lib/release/.
+            cp -a {libcrypto,libssl}.lib "$stage/lib/release"
 
+            # Publish headers
+            mkdir -p "$stage/include/openssl"
+            cp -a include/openssl/*.h "$stage/include/openssl"
         ;;
 
         darwin*)
@@ -147,10 +115,10 @@ pushd "$OPENSSL_SOURCE_DIR"
             # Not clear exactly why Configure/make generates lib*.1.0.0.dylib
             # for ${major_version}.${minor_version}.${build_version} == 1.0.1,
             # but obviously we must correctly predict the dylib filenames.
-            crypto_target_name="libcrypto.${major_version}.${minor_version}.dylib"
-            crypto_install_name="@executable_path/../Resources/${crypto_target_name}"
-            ssl_target_name="libssl.${major_version}.${minor_version}.dylib"
-            ssl_install_name="@executable_path/../Resources/${ssl_target_name}"
+            # crypto_target_name="libcrypto.${major_version}.${minor_version}.dylib"
+            # crypto_install_name="@executable_path/../Resources/${crypto_target_name}"
+            # ssl_target_name="libssl.${major_version}.${minor_version}.dylib"
+            # ssl_install_name="@executable_path/../Resources/${ssl_target_name}"
 
             # Force static linkage by moving .dylibs out of the way
             trap restore_dylibs EXIT
@@ -171,7 +139,7 @@ pushd "$OPENSSL_SOURCE_DIR"
             # As of 2017-09-08:
             # clang: error: unknown argument: '-gdwarf-with-dsym'
             opts="$(replace_switch -gdwarf-with-dsym -gdwarf-2 $opts)"
-            export CFLAG="$opts"
+            export CFLAGS="$opts"
             export LDFLAGS="-Wl,-headerpad_max_install_names"
 
             if [ "$AUTOBUILD_ADDRSIZE" = 32 ]
@@ -180,6 +148,9 @@ pushd "$OPENSSL_SOURCE_DIR"
             else
                 targetname='darwin64-x86_64-cc'
             fi
+
+            # deploy target
+            export MACOSX_DEPLOYMENT_TARGET=${LL_BUILD_DARWIN_DEPLOY_TARGET}
 
             # It seems to be important to Configure to pass (e.g.)
             # "-iwithsysroot=/some/path" instead of just glomming them on
@@ -212,13 +183,13 @@ pushd "$OPENSSL_SOURCE_DIR"
             unset packed[0]
 
             # Release
-            ./Configure zlib threads no-idea shared no-gost $targetname \
+            ./Configure zlib no-zlib-dynamic threads no-shared $targetname \
                 --prefix="$stage" --libdir="lib/release" --openssldir="share" \
                 --with-zlib-include="$stage/packages/include/zlib-ng" \
                 --with-zlib-lib="$stage/packages/lib/release" \
                 "${packed[@]}"
             make depend
-            make -j$(nproc)
+            make -j$AUTOBUILD_CPU_COUNT
             # Avoid plain 'make install' because, at least on Yosemite,
             # installing the man pages into the staging area creates problems
             # due to the number of symlinks. Thanks to Cinder for suggesting
@@ -228,12 +199,12 @@ pushd "$OPENSSL_SOURCE_DIR"
             # Modify .dylib path information.  Do this after install
             # to the copies rather than built or the dylib's will be
             # linked again wiping out the install_name.
-            crypto_stage_name="${stage}/lib/release/${crypto_target_name}"
-            ssl_stage_name="${stage}/lib/release/${ssl_target_name}"
-            chmod u+w "${crypto_stage_name}" "${ssl_stage_name}"
-            install_name_tool -id "${ssl_install_name}" "${ssl_stage_name}"
-            install_name_tool -id "${crypto_install_name}" "${crypto_stage_name}"
-            install_name_tool -change "${crypto_stage_name}" "${crypto_install_name}" "${ssl_stage_name}"
+            # crypto_stage_name="${stage}/lib/release/${crypto_target_name}"
+            # ssl_stage_name="${stage}/lib/release/${ssl_target_name}"
+            # chmod u+w "${crypto_stage_name}" "${ssl_stage_name}"
+            # install_name_tool -id "${ssl_install_name}" "${ssl_stage_name}"
+            # install_name_tool -id "${crypto_install_name}" "${crypto_stage_name}"
+            # install_name_tool -change "${crypto_stage_name}" "${crypto_install_name}" "${ssl_stage_name}"
 
             # conditionally run unit tests
             if [ "${DISABLE_UNIT_TESTS:-0}" = "0" ]; then
@@ -244,21 +215,6 @@ pushd "$OPENSSL_SOURCE_DIR"
         ;;
 
         linux*)
-            # Linux build environment at Linden comes pre-polluted with stuff that can
-            # seriously damage 3rd-party builds.  Environmental garbage you can expect
-            # includes:
-            #
-            #    DISTCC_POTENTIAL_HOSTS     arch           root        CXXFLAGS
-            #    DISTCC_LOCATION            top            branch      CC
-            #    DISTCC_HOSTS               build_name     suffix      CXX
-            #    LSDISTCC_ARGS              repo           prefix      CFLAGS
-            #    cxx_version                AUTOBUILD      SIGN        CPPFLAGS
-            #
-            # So, clear out bits that shouldn't affect our configure-directed build
-            # but which do nonetheless.
-            #
-            # unset DISTCC_HOSTS CC CXX CFLAGS CPPFLAGS CXXFLAGS
-
             # Default target per AUTOBUILD_ADDRSIZE
             opts="${TARGET_OPTS:--m$AUTOBUILD_ADDRSIZE $LL_BUILD_RELEASE}"
             opts="$(remove_cxxstd $opts)"
@@ -292,13 +248,13 @@ pushd "$OPENSSL_SOURCE_DIR"
             # '--openssldir' as well.
             # "shared" means build shared and static, instead of just static.
 
-            ./Configure zlib threads shared no-idea "$targetname" -fno-stack-protector "$opts" \
+            ./Configure zlib no-zlib-dynamic threads no-shared "$targetname" "$opts" \
                 --prefix="$stage" --libdir="lib/release" --openssldir="share" \
                 --with-zlib-include="$stage/packages/include/zlib-ng" \
                 --with-zlib-lib="$stage"/packages/lib/release/
             make depend
-            make -j$(nproc)
-            make install
+            make -j$AUTOBUILD_CPU_COUNT
+            make install_sw
 
             # conditionally run unit tests
             if [ "${DISABLE_UNIT_TESTS:-0}" = "0" ]; then
@@ -311,7 +267,7 @@ pushd "$OPENSSL_SOURCE_DIR"
             # This causes trouble for us down the road, along about the time
             # the consuming build tries to strip libraries.  It's easier to
             # make writable here than fix the viewer packaging.
-            chmod u+w "$stage"/lib/release/lib{crypto,ssl}.so*
+            # chmod u+w "$stage"/lib/release/lib{crypto,ssl}.so*
         ;;
     esac
     mkdir -p "$stage/LICENSES"
