@@ -108,9 +108,6 @@ pushd "$OPENSSL_SOURCE_DIR"
         ;;
 
         darwin*)
-            # workaround for finding makedepend on OS X
-            export PATH="$PATH":/usr/X11/bin/
-
             # Install name for dylibs based on major version number
             # Not clear exactly why Configure/make generates lib*.1.0.0.dylib
             # for ${major_version}.${minor_version}.${build_version} == 1.0.1,
@@ -128,90 +125,87 @@ pushd "$OPENSSL_SOURCE_DIR"
                 fi
             done
 
-            # Normally here we'd insert -arch $AUTOBUILD_CONFIGURE_ARCH before
-            # $LL_BUILD_RELEASE. But the way we must pass these $opts into
-            # Configure doesn't seem to work for -arch: we get tons of:
-            # clang: warning: argument unused during compilation: '-arch=x86_64'
-            # Anyway, selection of $targetname (below) appears to handle the
-            # -arch switch implicitly.
-            opts="${TARGET_OPTS:-$LL_BUILD_RELEASE}"
-            opts="$(remove_cxxstd $opts)"
-            # As of 2017-09-08:
-            # clang: error: unknown argument: '-gdwarf-with-dsym'
-            opts="$(replace_switch -gdwarf-with-dsym -gdwarf-2 $opts)"
-            export CFLAGS="$opts"
-            export LDFLAGS="-Wl,-headerpad_max_install_names"
-
-            if [ "$AUTOBUILD_ADDRSIZE" = 32 ]
-            then
-                targetname='darwin-i386-cc 386'
-            else
-                targetname='darwin64-x86_64-cc'
-            fi
-
             # deploy target
             export MACOSX_DEPLOYMENT_TARGET=${LL_BUILD_DARWIN_DEPLOY_TARGET}
 
-            # It seems to be important to Configure to pass (e.g.)
-            # "-iwithsysroot=/some/path" instead of just glomming them on
-            # as separate arguments. So make a pass over $opts, collecting
-            # switches with args in that form into a bash array.
-            packed=()
-            pack=()
-            function flush {
-                local IFS="="
-                # Flush 'pack' array to the next entry of 'packed'.
-                # ${pack[*]} concatenates all of pack's entries into a single
-                # string separated by the first char from $IFS.
-                packed+=("${pack[*]:-}")
+            for arch in x86_64 arm64 ; do
+                opts="${TARGET_OPTS:-$LL_BUILD_RELEASE}"
+                cc_opts="$(remove_cxxstd $opts)"
+                ld_opts="-Wl,-headerpad_max_install_names"
+
+                # It seems to be important to Configure to pass (e.g.)
+                # "-iwithsysroot=/some/path" instead of just glomming them on
+                # as separate arguments. So make a pass over $opts, collecting
+                # switches with args in that form into a bash array.
+                packed=()
                 pack=()
-            }
-            for opt in $opts $LDFLAGS
-            do 
-               if [ "x${opt#-}" != "x$opt" ]
-               then
-                   # 'opt' does indeed start with dash.
-                   flush
-               fi
-               # append 'opt' to 'pack' array
-               pack+=("$opt")
+                function flush {
+                    local IFS="="
+                    # Flush 'pack' array to the next entry of 'packed'.
+                    # ${pack[*]} concatenates all of pack's entries into a single
+                    # string separated by the first char from $IFS.
+                    packed+=("${pack[*]:-}")
+                    pack=()
+                }
+                for opt in $cc_opts $ld_opts
+                do
+                if [ "x${opt#-}" != "x$opt" ]
+                then
+                    # 'opt' does indeed start with dash.
+                    flush
+                fi
+                # append 'opt' to 'pack' array
+                pack+=("$opt")
+                done
+                # When we exit the above loop, we've got one more pending entry in
+                # 'pack'. Flush that too.
+                flush
+                # We always have an extra first entry in 'packed'. Get rid of that.
+                unset packed[0]
+
+                mkdir -p "build_$arch"
+                pushd "build_$arch"
+                    CFLAGS="$cc_opts" \
+                    CXXFLAGS="$opts" \
+                    LDFLAGS="$ld_opts" \
+                    ../Configure --release zlib no-zlib-dynamic threads no-shared darwin64-"$arch"-cc \
+                        --prefix="$stage" --libdir="lib/release/$arch" --openssldir="share" \
+                        --with-zlib-include="$stage/packages/include/zlib-ng" \
+                        --with-zlib-lib="$stage/packages/lib/release" \
+                        "${packed[@]}"
+                        make depend
+                        make -j$AUTOBUILD_CPU_COUNT
+                        # Avoid plain 'make install' because, at least on Yosemite,
+                        # installing the man pages into the staging area creates problems
+                        # due to the number of symlinks. Thanks to Cinder for suggesting
+                        # this make target.
+                        make install_sw
+
+                        # Modify .dylib path information.  Do this after install
+                        # to the copies rather than built or the dylib's will be
+                        # linked again wiping out the install_name.
+                        # crypto_stage_name="${stage}/lib/release/${crypto_target_name}"
+                        # ssl_stage_name="${stage}/lib/release/${ssl_target_name}"
+                        # chmod u+w "${crypto_stage_name}" "${ssl_stage_name}"
+                        # install_name_tool -id "${ssl_install_name}" "${ssl_stage_name}"
+                        # install_name_tool -id "${crypto_install_name}" "${crypto_stage_name}"
+                        # install_name_tool -change "${crypto_stage_name}" "${crypto_install_name}" "${ssl_stage_name}"
+
+                        # conditionally run unit tests
+                        if [ "${DISABLE_UNIT_TESTS:-0}" = "0" ]; then
+                            make test
+                        fi
+
+                        make clean
+                popd
             done
-            # When we exit the above loop, we've got one more pending entry in
-            # 'pack'. Flush that too.
-            flush
-            # We always have an extra first entry in 'packed'. Get rid of that.
-            unset packed[0]
 
-            # Release
-            ./Configure zlib no-zlib-dynamic threads no-shared $targetname \
-                --prefix="$stage" --libdir="lib/release" --openssldir="share" \
-                --with-zlib-include="$stage/packages/include/zlib-ng" \
-                --with-zlib-lib="$stage/packages/lib/release" \
-                "${packed[@]}"
-            make depend
-            make -j$AUTOBUILD_CPU_COUNT
-            # Avoid plain 'make install' because, at least on Yosemite,
-            # installing the man pages into the staging area creates problems
-            # due to the number of symlinks. Thanks to Cinder for suggesting
-            # this make target.
-            make install_sw
+            # create stage structure
+            mkdir -p "$stage/lib/release"
 
-            # Modify .dylib path information.  Do this after install
-            # to the copies rather than built or the dylib's will be
-            # linked again wiping out the install_name.
-            # crypto_stage_name="${stage}/lib/release/${crypto_target_name}"
-            # ssl_stage_name="${stage}/lib/release/${ssl_target_name}"
-            # chmod u+w "${crypto_stage_name}" "${ssl_stage_name}"
-            # install_name_tool -id "${ssl_install_name}" "${ssl_stage_name}"
-            # install_name_tool -id "${crypto_install_name}" "${crypto_stage_name}"
-            # install_name_tool -change "${crypto_stage_name}" "${crypto_install_name}" "${ssl_stage_name}"
-
-            # conditionally run unit tests
-            if [ "${DISABLE_UNIT_TESTS:-0}" = "0" ]; then
-                make test
-            fi
-
-            make clean
+           # create fat libraries
+            lipo -create -output ${stage}/lib/release/libcrypto.a ${stage}/lib/release/x86_64/libcrypto.a ${stage}/lib/release/arm64/libcrypto.a
+            lipo -create -output ${stage}/lib/release/libssl.a ${stage}/lib/release/x86_64/libssl.a ${stage}/lib/release/arm64/libssl.a
         ;;
 
         linux*)

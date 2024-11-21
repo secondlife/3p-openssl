@@ -8,7 +8,7 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [windows-2022, macos-12, ubuntu-22.04]
+        os: [windows-2022, macos-15, ubuntu-22.04]
         addrsize: ["64"]
     runs-on: ${{ matrix.os }}
     steps:
@@ -19,7 +19,7 @@ jobs:
           choco install -y nasm jom
           echo "C:\Program Files\NASM" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           echo "C:\ProgramData\chocolatey\lib\jom\tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-      - uses: secondlife/action-autobuild@v4
+      - uses: secondlife/action-autobuild@v5
         with:
           addrsize: ${{ matrix.addrsize }}
   release:
